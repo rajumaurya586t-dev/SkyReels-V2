@@ -1,4 +1,51 @@
-<p align="center">
+import numpy as np
+import torch
+import torchvision.transforms.functional as TF
+from diffusers import AutoencoderKLWan, SkyReelsV2DiffusionForcingImageToVideoPipeline, UniPCMultistepScheduler
+from diffusers.utils import export_to_video, load_image
+
+model_id = "Skywork/SkyReels-V2-DF-14B-720P-Diffusers"
+vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
+pipeline = SkyReelsV2DiffusionForcingImageToVideoPipeline.from_pretrained(
+    model_id, vae=vae, torch_dtype=torch.bfloat16
+)
+flow_shift = 5.0  # 8.0 for T2V, 5.0 for I2V
+pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config, flow_shift=flow_shift)
+pipeline.to("cuda")
+
+first_frame = load_image("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/flf2v_input_first_frame.png")
+last_frame = load_image("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/flf2v_input_last_frame.png")
+
+def aspect_ratio_resize(image, pipeline, max_area=720 * 1280):
+    aspect_ratio = image.height / image.width
+    mod_value = pipeline.vae_scale_factor_spatial * pipeline.transformer.config.patch_size[1]
+    height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
+    width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
+    image = image.resize((width, height))
+    return image, height, width
+
+def center_crop_resize(image, height, width):
+    # Calculate resize ratio to match first frame dimensions
+    resize_ratio = max(width / image.width, height / image.height)
+
+    # Resize the image
+    width = round(image.width * resize_ratio)
+    height = round(image.height * resize_ratio)
+    size = [width, height]
+    image = TF.center_crop(image, size)
+
+    return image, height, width
+
+first_frame, height, width = aspect_ratio_resize(first_frame, pipeline)
+if last_frame.size != first_frame.size:
+    last_frame, _, _ = center_crop_resize(last_frame, height, width)
+
+prompt = "CG animation style, a small blue bird takes off from the ground, flapping its wings. The bird's feathers are delicate, with a unique pattern on its chest. The background shows a blue sky with white clouds under bright sunshine. The camera follows the bird upward, capturing its flight and the vastness of the sky from a close-up, low-angle perspective."
+
+output = pipeline(
+    image=first_frame, last_image=last_frame, prompt=prompt, height=height, width=width, guidance_scale=5.0
+).frames[0]
+export_to_video(output, "output.mp4", fps=24, quality=8)<p align="center">
   <img src="assets/logo2.png" alt="SkyReels Logo" width="50%">
 </p>
 
